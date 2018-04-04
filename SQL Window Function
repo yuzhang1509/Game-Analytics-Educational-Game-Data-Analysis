@@ -1,0 +1,139 @@
+# correct csv file is new.csv
+
+# Create database game;
+# Use game;
+
+/*****************
+Create root table
+/*****************
+
+CREATE TABLE test
+(
+    member_id string,
+    activity_id int,
+    activity_play_id int,
+    activity_timestamp_start timestamp,
+    activity_timestamp_end timestamp,
+    activity_duration int,
+    total_time_played_in_activity int,
+    adaptive_score decimal,
+    number_of_passed_rounds int,
+    number_of_failed_rounds int,
+    number_of_rounds_started int,
+    number_of_rounds_completed int,
+    number_of_submits int,
+    points_earned int,
+    stars_earned int,
+    activityplay_outcome string,
+    activity_difficulty_id string,
+    gametype_id string,
+    activity_range string,
+    series_id int
+    )
+
+ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' STORED AS TEXTFILE tblproperties ("skip.header.line.count"="1");
+
+/******
+Set timestamp format
+/******
+
+ALTER TABLE test SET SERDEPROPERTIES ("timestamp.formats"="yyyy-MM-dd' 'HH:mm:ss");
+
+/******
+Load data into tables
+/*******
+
+LOAD DATA INPATH '/hive/game/new.csv' OVERWRITE
+INTO TABLE test;
+
+
+***********
+Part two: transform into daily log on
+**********
+create table churn_prep1 AS
+Select member_id, activity_id, activity_play_id, activity_timestamp_start,
+from_unixtime(unix_timestamp(activity_timestamp_start,'yyyy-MM-dd' 'hh:mm:ss'),'yyyy-MM-dd') as start_date 
+From test;
+
+
+Create table churn_prep2 as
+Select member_id, activity_id, activity_play_id, activity_timestamp_start,
+start_date,
+row_number() OVER (partition by member_id, start_date order by 
+activity_timestamp_start asc ) AS seq from churn_prep1,
+
+count(activity_play_id) over (partition by member_id order by unix_timestamp(activity_timestamp_start)
+                                 range between 1209600 preceding and current row )AS activity_count_14days,
+
+count(activity_play_id) over (partition by member_id order by unix_timestamp(activity_timestamp_start)
+                                 range between 1987220 preceding and current row )AS activity_count_23days,
+
+avg(activity_duration) over (partition by member_id order by unix_timestamp(activity_timestamp_start)
+                               Range between 1987220 preceding and current row) AS avg_duration_23days,
+
+avg(adaptive_score)   over (partition by member_id order by unix_timestamp(activity_timestamp_start)
+                               range between 1987220 preceding and current row) AS avg_score_23days,
+
+avg(number_of_passed_rounds)   over (partition by member_id order by unix_timestamp(activitay_timestamp_start)
+                                Range between 1987220 preceding and current row) AS avg_passed_rounds_23days,
+
+avg(number_of_failed_rounds)   over (partition by member_id order by unix_timestamp(activity_timestamp_start)
+                                Range between 1987220 preceding and current row) AS avg_failed_rounds_23days,
+
+avg(number_of_rounds_started)   over (partition by member_id order by unix_timestamp(activity_timestamp_start)
+                                Range between 1987220 preceding and current row) AS avg_rounds_started_23days,
+
+
+avg(number_of_rounds_completed)   over (partition by member_id order by unix_timestamp(activity_timestamp_start)
+                                range between 1987220 preceding and current row) AS avg_rounds_completed_23days,
+
+
+avg(number_of_submits)   over (partition by member_id order by unix_timestamp(activity_timestamp_start)
+                                Range between 1987220 preceding and current row) AS avg_number_submits_23days,
+
+avg(points_earned)   over (partition by member_id order by unix_timestamp(activity_timestamp_start)
+                                Range between 1987220 preceding and current row) AS avg_points_earned_23days,
+
+avg(stars_earned)   over (partition by member_id order by unix_timestamp(activity_timestamp_start)
+                                Range between 1987220 preceding and current row) AS avg_stars_earned_23days;
+
+
+###########
+Create table churn_prep3 as
+Select member_id, activity_id, activity_play_id, activity_timestamp_start,
+start_date, seq from churn_prep2 where seq=1;
+
+Create table prep4 as
+Select member_id, activity_id, activity_play_id, activity_timestamp_start,
+start_date,
+
+lag( start_date,1) over (partition by member_id order by start_date) AS
+previous_log_on,
+
+
+count(activity_play_id) over (partition by member_id order by unix_timestamp(activity_timestamp_start)
+                                 range between 1209600 preceding and current row )AS activity_count_14days,
+
+count(activity_play_id) over (partition by member_id order by unix_timestamp(activity_timestamp_start)
+                                 range between 1987220 preceding and current row )AS activity_count_23days
+
+From churn_prep3;
+
+
+————
+
+Create table log_on as
+
+Select member_id,activity_id, activity_play_id, activity_timestamp_start,
+start_date,
+previous_log_on , datediff(start_date, previous_log_on) as recency_logon,
+
+activity_count_3days, activity_count_7days, activity_count_14days
+From prep4
+
+
+###export
+Exit;
+
+./bin/hive -e 'set hive.cli.print.header=true; select * from log_on' | sed 's/[\t]/,/g'  > /hive/exports/log_on.csv
+
